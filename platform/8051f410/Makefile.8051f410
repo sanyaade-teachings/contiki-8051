@@ -1,0 +1,27 @@
+ifndef CONTIKI
+  $(error CONTIKI not defined! You must specify where CONTIKI resides!)
+endif
+CFLAGS  += -DRIME_CONF_NO_POLITE_ANNOUCEMENTS
+RIME_CONF_NO_POLITE_ANNOUCEMENTS = 1
+
+DEFUART = /dev/ttyUSB0
+SERIALDUMP = $(CONTIKI)/tools/sky/serialdump-linux -b115200 $(DEFUART)
+
+CONTIKI_TARGET_DIRS = . dev
+CONTIKI_TARGET_MAIN = ${addprefix $(OBJECTDIR)/,contiki-f007-main.o}
+
+CONTIKI_TARGET_SOURCEFILES = contiki-f410-main.c 
+
+CONTIKI_SOURCEFILES += $(CONTIKI_TARGET_SOURCEFILES)
+
+.SUFFIXES:
+
+%.upload: %.ihx
+	$(PROG) -P $<
+
+
+### Define the CPU directory
+CONTIKI_CPU=$(CONTIKI)/cpu/8051/f410
+include $(CONTIKI)/cpu/8051/f410/Makefile.f410
+
+contiki-$(TARGET).a:# ${addprefix $(OBJECTDIR)/,symbols.o}
