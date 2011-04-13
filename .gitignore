@@ -56,3 +56,5 @@ examples/*/*.asm
 *.rel
 *.sym
 *.lib
+
+*.pdf
