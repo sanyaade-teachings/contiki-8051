@@ -78,7 +78,9 @@ contiki-$(TARGET).lib: $(CONTIKI_OBJECTFILES) $(PROJECT_OBJECTFILES) $(CONTIKI_A
 
 %.$(TARGET): %.ihx %_linear.hex
 
-
+# .rel is the object file default suffix under sdcc
+%.rel: %.co
+	mv $< $@
 
 # .ihx is the sdcc binary output file
 .PRECIOUS: %.ihx %.rel %_linear.hex
