@@ -1,5 +1,5 @@
 ifndef TARGET
-TARGET=8051f007
+TARGET=f007
 endif
 
 CONTIKI_PROJECT =  hello-world
