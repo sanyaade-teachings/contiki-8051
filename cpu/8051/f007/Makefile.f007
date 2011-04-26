@@ -40,7 +40,7 @@ code_segment = --codeseg $(word 1,$(shell cat ${OBJECTDIR}/segment.rules | \
 
 else
 #no banking
-MEMORY_MODEL=large
+MEMORY_MODEL=small
 LDFLAGS += --code-loc 0000 --code-size 65500
 code_segment =
 
