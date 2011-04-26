@@ -5,18 +5,64 @@ AS       = sdcc
 AR	   = sdcclib
 OBJCOPY  = objcopy
 STRIP    = strip
+PACKIHX  = packihx
+CONVERTER_DIR = $(CONTIKI)/cpu/cc2430/converter
+CONVERTER = $(CONVERTER_DIR)/converter
 
-CFLAGS  += --std-c99 --model-large -DSDCC_8051 
+CFLAGS  += --model-$(MEMORY_MODEL) --stack-auto -DSDCC_8051 
+CFLAGS  += --std-c99 -DAUTOSTART_ENABLE
+
+LDFLAGS += --model-$(MEMORY_MODEL) --stack-auto -DSDCC_CC2430
+LDFLAGS +=  --out-fmt-ihx --xram-loc 57344 --xram-size 7936 
+
 ASFLAGS += -plosgff
-LDFLAGS += --model-large -DSDCC_8051 --out-fmt-ihx
-##LDFLAGS += -L /home/user/local/share/sdcc/lib/large-stack-auto
-##LDFLAGS += --verbose
-##LDFLAGS += -V
+
 AROPTS   = -a
+
+ifeq ($(HAVE_BANKING),1)
+#banking
+MEMORY_MODEL=huge
+LDFLAGS += --code-size 0x20000 
+LDFLAGS += -Wl-bCSEG=0x000000 
+LDFLAGS += -Wl-bBANK1=0x018000
+LDFLAGS += -Wl-bBANK2=0x028000 
+LDFLAGS += -Wl-bBANK3=0x038000
+#relocated code (for bank switching )
+LDFLAGS += -Wl-r
+CFLAGS += -DHAVE_SDCC_BANKING
+#use this in $(call code_segment,$<) to get segment for a source file.
+code_segment = --codeseg $(word 1,$(shell cat ${OBJECTDIR}/segment.rules | \
+	perl ${CONTIKI_CPU}/segment.rules.pl $1 ) CSEG )
+
+#bank switching file conversion 
+%.hex: %.ihx $(CONVERTER)
+	$(CONVERTER) -f $<
+
+else
+#no banking
+MEMORY_MODEL=large
 LDFLAGS += --code-loc 0000 --code-size 65500
 code_segment =
+
+%.hex: %.ihx
+	$(PACKIHX) $< > $@
+	
+endif 
+
+# When building with banking we need the converter
+# for ihx -> hex conversion. Make sure it's built so make doesn't bail out
+# with an error
+converter: $(CONVERTER)
+
+converter-clean:
+	$(MAKE) --directory=$(CONVERTER_DIR) clean
+
+$(CONVERTER):
+	$(MAKE) --directory=$(CONVERTER_DIR) converter
+
 ### CPU-dependent cleanup files
-CLEAN += *.lnk *.sym *.lib *.ihx *.rel *.mem *.rst *.asm *_linear.hex
+CLEAN += *.lnk *.sym *.lib *.ihx *.rel *.mem *.rst *.asm *.hex *.$(TARGET)
+CLEAN += symbols.c symbols.h
 
 ### CPU-dependent directories
 CONTIKI_CPU_DIRS = . dev
@@ -25,9 +71,10 @@ CONTIKI_CPU_DIRS = . dev
 CONTIKI_SOURCEFILES += clock.c uart.c  adc.c 
 CONTIKI_ASMFILES +=
 
-CONTIKI_ASMOBJECTFILES = ${addprefix $(OBJECTDIR)/,$(CONTIKI_ASMFILES:.S=.o)}
+CONTIKI_ASMOBJECTFILES = ${addprefix $(OBJECTDIR)/,$(CONTIKI_ASMFILES:.S=.rel)}
 
-CONTIKI_CASMOBJECTFILES = ${addprefix $(OBJECTDIR)/,$(CONTIKI_CASMFILES:.cS=.o)}
+CONTIKI_CASMOBJECTFILES = ${addprefix $(OBJECTDIR)/, \
+	$(CONTIKI_CASMFILES:.cS=.rel)}
 
 CONTIKI_PLATFORM_DIRS = $(PLATFORM_APPDIRS) \
 	 ${addprefix $(CONTIKI)/platform/$(TARGET)/, $(CONTIKI_TARGET_DIRS)}
@@ -35,39 +82,58 @@ CONTIKI_PLATFORM_DIRS = $(PLATFORM_APPDIRS) \
 CONTIKI_CPU_DIRS_LIST    = ${addprefix $(CONTIKI_CPU)/, \
                                $(CONTIKI_CPU_DIRS)}
 
+oname = ${patsubst %.c,%.rel,${patsubst %.S,%.rel,$(1)}}
+
+CONTIKI_OBJECTFILES = ${addprefix $(OBJECTDIR)/, \
+	${call oname, $(CONTIKI_SOURCEFILES)}}
+
+PROJECT_OBJECTFILES = ${addprefix $(OBJECTDIR)/, \
+	${call oname, $(PROJECT_SOURCEFILES)}}
+
 ### Compilation rules
 
-
-SEGMENT_RULE_FILES = ${foreach dir, ${CONTIKI_PLATFORM_DIRS} ${CONTIKI_CPU_DIRS_LIST}, ${wildcard $(dir)/segment.rules} } 
+SEGMENT_RULE_FILES = ${foreach dir, . ${CONTIKI_PLATFORM_DIRS} \
+	${CONTIKI_CPU_DIRS_LIST}, ${wildcard $(dir)/segment.rules} }
 ${OBJECTDIR}/segment.rules: ${SEGMENT_RULE_FILES}
 	echo ${SEGMENT_RULE_FILES}
 	cat ${SEGMENT_RULE_FILES} > $@
 
-
+CUSTOM_RULE_LINK=1
 CUSTOM_RULE_C_TO_OBJECTDIR_O=1
 CUSTOM_RULE_ALLOBJS_TO_TARGETLIB=1
 
 ifdef CUSTOM_RULE_C_TO_OBJECTDIR_O
 ifeq ($(HAVE_BANKING),1)
-$(OBJECTDIR)/%.o: %.c ${OBJECTDIR}/segment.rules
+$(OBJECTDIR)/%.rel: %.c ${OBJECTDIR}/segment.rules
 	@echo "Compile:"$<" to segment " $(call code_segment,$<)
-	$(CC) $(CFLAGS) -MM -c $< > $(@:.o=.d)
+	$(CC) $(CFLAGS) -MM -c $< > $(@:.rel=.d)
+	@echo -n ${OBJECTDIR}/ >  $(@:.rel=.$$$$); \
+	cat $(@:.rel=.d) >> $(@:.rel=.$$$$); \
+	cp $(@:.rel=.$$$$) $(@:.rel=.d); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+		-e '/^$$/ d' -e 's/$$/ :/' < $(@:.rel=.$$$$) >> $(@:.rel=.d); \
+	rm -f $(@:.rel=.$$$$)
 	$(CC) $(call code_segment,$<) $(CFLAGS) -c $< -o $@
-	@$(FINALIZE_DEPENDENCY)
+	#@$(FINALIZE_DEPENDENCY)
 else
-$(OBJECTDIR)/%.o: %.c
+$(OBJECTDIR)/%.rel: %.c
+	@echo "Compile:"$<" to segment " $(call code_segment,$<)
+	$(CC) $(CFLAGS) -MM -c $< > $(@:.rel=.d)
+	@echo -n ${OBJECTDIR}/ >  $(@:.rel=.$$$$); \
+	cat $(@:.rel=.d) >> $(@:.rel=.$$$$); \
+	cp $(@:.rel=.$$$$) $(@:.rel=.d); \
+	sed -e 's/#.*//' -e 's/^[^:]*: *//' -e 's/ *\\$$//' \
+		-e '/^$$/ d' -e 's/$$/ :/' < $(@:.rel=.$$$$) >> $(@:.rel=.d); \
+	rm -f $(@:.rel=.$$$$)
 	$(CC) $(CFLAGS) -c $< -o $@
-	$(CC) $(CFLAGS) -MM -c $< > $(@:.o=.d)
-	@$(FINALIZE_DEPENDENCY)
+	#$(CC) $(CFLAGS) -MM -c $< > $(@:.o=.d)
+	#@$(FINALIZE_DEPENDENCY)
 endif
 endif
-
-$(OBJECTDIR)/%.rel: $(OBJECTDIR)/%.o
-	cp $< $@ 
 
 
 ifdef CUSTOM_RULE_CS_TO_OBJECTDIR_O
-$(OBJECTDIR)/%.o: %.cS
+$(OBJECTDIR)/%.rel: %.cS
 	cp $< $(OBJECTDIR)/$*.c
 	$(CC) $(CFLAGS) -E $(OBJECTDIR)/$*.c > $(OBJECTDIR)/tmp
 	perl -pe "s/^#(.*)/;$$1/" $(OBJECTDIR)/tmp > $(OBJECTDIR)/$*.S
@@ -76,26 +142,16 @@ $(OBJECTDIR)/%.o: %.cS
 endif
 
 #CUSTOM_RULE_ALLOBJS_TO_TARGETLIB
-contiki-$(TARGET).lib: $(CONTIKI_OBJECTFILES) $(PROJECT_OBJECTFILES:.o=.rel) $(CONTIKI_ASMOBJECTFILES) $(CONTIKI_CASMOBJECTFILES)
+contiki-$(TARGET).lib: $(CONTIKI_OBJECTFILES) $(PROJECT_OBJECTFILES) \
+	$(CONTIKI_ASMOBJECTFILES) $(CONTIKI_CASMOBJECTFILES)
 	rm -f $@
 	for target in $^; do echo $$target >> $@; done
-	sed 's/\.o$$/\.rel/' $@ -i
+	#sed 's/\.o$$/\.rel/' $@ -i
 
-%.$(TARGET): %.ihx %_linear.hex
-
-# .rel is the object file default suffix under sdcc
-%.rel: %.co
-	cp $@ $<
-# .ihx is the sdcc binary output file
-.PRECIOUS: %.ihx %.rel %_linear.hex
+.PRECIOUS: %.$(TARGET) %.ihx %.hex $(OBJECTDIR)/%.rel
 
 # .ihx is the sdcc binary output file
-%.ihx: %.rel $(CONTIKI_TARGET_MAIN:.o=.rel) contiki-$(TARGET).lib
-	$(CC) $(LDFLAGS) -o $@ $(CONTIKI_TARGET_MAIN:.o=.rel) $*.rel -llibsdcc.lib -lcontiki-$(TARGET).lib
+%.ihx: $(OBJECTDIR)/%.rel $(CONTIKI_TARGET_MAIN) contiki-$(TARGET).lib
+	$(CC) $(LDFLAGS) -o $@ $(CONTIKI_TARGET_MAIN) $(OBJECTDIR)/$*.rel \
+		-llibsdcc.lib -lcontiki-$(TARGET).lib
 
-%_linear.hex: %.ihx
-	$(CONTIKI)/cpu/8051/converter/converter -f $< $@
-
-# Force the compilation of %.$(TARGET) to compile the %.ihx file.
-%.$(TARGET): %.ihx %_linear.hex
-	@
