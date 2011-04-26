@@ -1,6 +1,16 @@
+MODEL_SUFFIX=xyz
+ifdef DEFINES
+	MODEL_SUFFIX=${patsubst MODEL_N%,n%, \
+		${filter MODEL_%,${subst $(COMMA), ,$(DEFINES)}}}
+endif
+
+PATH:=${CONTIKI}/platform/${TARGET}/tools/bin:${PATH}
+export PATH 
+
 ifndef CONTIKI
   $(error CONTIKI not defined! You must specify where CONTIKI resides!)
 endif
+
 CFLAGS  += -DRIME_CONF_NO_POLITE_ANNOUCEMENTS
 RIME_CONF_NO_POLITE_ANNOUCEMENTS = 1
 
@@ -8,13 +18,27 @@ DEFUART = /dev/ttyUSB0
 SERIALDUMP = $(CONTIKI)/tools/sky/serialdump-linux -b115200 $(DEFUART)
 
 CONTIKI_TARGET_DIRS = . dev
-CONTIKI_TARGET_MAIN = ${addprefix $(OBJECTDIR)/,contiki-f007-main.o}
+CONTIKI_TARGET_MAIN = ${addprefix $(OBJECTDIR)/,contiki-f007-main.rel}
 
 CONTIKI_TARGET_SOURCEFILES = contiki-f007-main.c 
 
 CONTIKI_SOURCEFILES += $(CONTIKI_TARGET_SOURCEFILES)
 
-.SUFFIXES:
+FORCE:
+
+%.$(TARGET): %.hex FORCE
+	cp $< $(<:.hex=.$(TARGET))
+	if [ -f $(<:.hex=.ihx) ] ; then \
+	cp $(<:.hex=.ihx) $(<:.hex=-$(MODEL_SUFFIX).ihx); fi
+	@echo 'Code footprint:'
+	@echo    'Area                               Addr    Size   Decimal'
+	@echo    '-------------------------------    -----   ----   -------'
+	@echo -n 'HOME,CSEG,CONST,XINIT,GS*          00000   '
+	@egrep ',CODE\)' ${<:.hex=.map} | egrep -v '(^BANK.[^=])' | uniq | \
+	awk '{ SUM += $$5 } END { printf "%X = %6d", SUM, SUM }'
+	@echo '. bytes (REL,CON,CODE)'
+	@egrep '(^BANK.[^=])' ${<:.hex=.map} | uniq | sort
+	@egrep -A 5 'Other memory' ${<:.hex=.mem}
 
 %.upload: %.ihx
 	$(PROG) -P $<
@@ -24,4 +48,4 @@ CONTIKI_SOURCEFILES += $(CONTIKI_TARGET_SOURCEFILES)
 CONTIKI_CPU=$(CONTIKI)/cpu/8051/f007
 include $(CONTIKI)/cpu/8051/f007/Makefile.f007
 
-contiki-$(TARGET).a:# ${addprefix $(OBJECTDIR)/,symbols.o}
+contiki-$(TARGET).a:# ${addprefix $(OBJECTDIR)/,symbols.rel}
